@@ -1398,6 +1398,11 @@ void rlOrtho(float left, float right, float bottom, float top, float znear, floa
 // Set the viewport area (transformation from normalized device coordinates to window coordinates)
 void rlViewport(int x, int y, int width, int height)
 {
+    // NOTE: Vertex data already accumulated in the batch belongs to the previous viewport,
+    // it must be drawn before the viewport change or it would be rendered to the new one
+    // NOTE: While stereo rendering, per-eye viewports are managed internally at batch draw time
+    if (!rlIsStereoRenderEnabled()) rlDrawRenderBatchActive();
+
     glViewport(x, y, width, height);
 }
 
@@ -1648,46 +1653,51 @@ void rlSetTexture(unsigned int id)
         {
             rlDrawRenderBatch(RLGL.currentBatch);
         }
-        RLGL.State.currentTextureId = RLGL.State.defaultTextureId;
+
+        // Texture id 0 is an alias for the default texture,
+        // it goes through the same draw call splitting logic as any other texture switch
+        id = RLGL.State.defaultTextureId;
 #endif
     }
     else
     {
 #if defined(GRAPHICS_API_OPENGL_11)
         rlEnableTexture(id);
-#else
-        RLGL.State.currentTextureId = id;
-        if (RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].textureId != id)
-        {
-            if (RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount > 0)
-            {
-                // Make sure current RLGL.currentBatch->draws[i].vertexCount is aligned a multiple of 4,
-                // that way, following QUADS drawing will keep aligned with index processing
-                // It implies adding some extra alignment vertex at the end of the draw,
-                // those vertex are not processed but they are considered as an additional offset
-                // for the next set of vertex to be drawn
-                if (RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].mode == RL_LINES) RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexAlignment = ((RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount < 4)? RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount : RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount%4);
-                else if (RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].mode == RL_TRIANGLES) RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexAlignment = ((RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount < 4)? 1 : (4 - (RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount%4)));
-                else RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexAlignment = 0;
-
-                if (!rlCheckRenderBatchLimit(RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexAlignment))
-                {
-                    RLGL.State.vertexCounter += RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexAlignment;
-
-                    RLGL.currentBatch->drawCounter++;
-
-                    RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].mode = RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 2].mode;
-
-                }
-            }
-
-            if (RLGL.currentBatch->drawCounter >= RL_DEFAULT_BATCH_DRAWCALLS) rlDrawRenderBatch(RLGL.currentBatch);
-
-            RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].textureId = id;
-            RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount = 0;
-        }
 #endif
     }
+
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+    RLGL.State.currentTextureId = id;
+    if (RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].textureId != id)
+    {
+        if (RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount > 0)
+        {
+            // Make sure current RLGL.currentBatch->draws[i].vertexCount is aligned a multiple of 4,
+            // that way, following QUADS drawing will keep aligned with index processing
+            // It implies adding some extra alignment vertex at the end of the draw,
+            // those vertex are not processed but they are considered as an additional offset
+            // for the next set of vertex to be drawn
+            if (RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].mode == RL_LINES) RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexAlignment = ((RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount < 4)? RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount : RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount%4);
+            else if (RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].mode == RL_TRIANGLES) RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexAlignment = ((RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount < 4)? 1 : (4 - (RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount%4)));
+            else RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexAlignment = 0;
+
+            if (!rlCheckRenderBatchLimit(RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexAlignment))
+            {
+                RLGL.State.vertexCounter += RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexAlignment;
+
+                RLGL.currentBatch->drawCounter++;
+
+                RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].mode = RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 2].mode;
+
+            }
+        }
+
+        if (RLGL.currentBatch->drawCounter >= RL_DEFAULT_BATCH_DRAWCALLS) rlDrawRenderBatch(RLGL.currentBatch);
+
+        RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].textureId = id;
+        RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].vertexCount = 0;
+    }
+#endif
 }
 
 // Select and active a texture slot
@@ -1954,13 +1964,30 @@ void rlSetCullFace(int mode)
 }
 
 // Enable scissor test
-void rlEnableScissorTest(void) { glEnable(GL_SCISSOR_TEST); }
+void rlEnableScissorTest(void)
+{
+    // NOTE: Vertex data already accumulated in the batch belongs to the previous scissor state,
+    // it must be drawn before the state change or it would be affected by the new one
+    rlDrawRenderBatchActive();
+
+    glEnable(GL_SCISSOR_TEST);
+}
 
 // Disable scissor test
-void rlDisableScissorTest(void) { glDisable(GL_SCISSOR_TEST); }
+void rlDisableScissorTest(void)
+{
+    rlDrawRenderBatchActive();
+
+    glDisable(GL_SCISSOR_TEST);
+}
 
 // Scissor test
-void rlScissor(int x, int y, int width, int height) { glScissor(x, y, width, height); }
+void rlScissor(int x, int y, int width, int height)
+{
+    rlDrawRenderBatchActive();
+
+    glScissor(x, y, width, height);
+}
 
 // Enable wire mode
 void rlEnableWireMode(void)
